@@ -1,30 +1,69 @@
 ﻿//+---------------------------------------------------------------------+
-//|                                      CStrategySignalService.mqh     |
-//| PURPOSE: Generate BUY/SELL signals using pre-initialized indicators |
+//|                      CStrategySignalService.mqh                     |
+//|  Bollinger Bands + RSI mean-reversion signal service                |
 //+---------------------------------------------------------------------+
-
 #ifndef __BOLLINGER_RSI_SIGNAL__
 #define __BOLLINGER_RSI_SIGNAL__
 
 #include "../CommonLibs/Indicators/BollingerBands.mqh"
 #include "../CommonLibs/Indicators/RSIIndicator.mqh"
-#include "../CommonLibs/Core/Logger.mqh"
-
+//
 enum SignalType
   {
    SIGNAL_NONE,
    SIGNAL_BUY,
    SIGNAL_SELL
   };
+//
+enum TradeDirection
+  {
+   DIR_BUY,
+   DIR_SELL
+  };
 
+// RuleCheck struct stores result of each rule evaluation
+struct RuleCheck
+  {
+   bool              BreakCandleRSIThresholdMet; //RSI on break candle meets threshold (oversold for BUY, overbought for SELL)
+   bool              BreakCandleBreaksBand;      //Break candle closes outside Bollinger band (with buffer)
+   bool              EntryCandleReentersBand;    //Entry candle moves back into Bollinger band (with buffer)
+   bool              EntryCandleIsGreen;         //Entry candle color (close>open for green, else red)
+   bool              EntryCandleIsRed;           //Entry candle color (close>open for green, else red)
+   bool              BreakCandleIsGreen;         //Break candle color (close>open for green, else red)
+   bool              BreakCandleIsRed;           //Break candle color (close>open for green, else red)
+   bool              EntryBodyRelativeToMidBB;   //Entry candle entirely below (BUY) or above (SELL) middle Bollinger band
+  };
+
+// CandleData stores relevant candle and indicator data
+struct CandleData
+  {
+   double            closeEntry;
+   double            openEntry;
+   double            closeBreak;
+   double            openBreak;
+
+   double            bbLowerEntry;
+   double            bbMiddleEntry;
+   double            bbUpperEntry;
+   double            bbLowerBreak;
+   double            bbUpperBreak;
+
+   double            rsiBreak;
+
+   double            entryBody;
+   double            breakBody;
+   double            entryBuffer;
+   double            breakBuffer;
+  };
+// Generated signal result
 struct SignalResult
   {
    SignalType        type;
    double            entryPrice;
-   double            stopLossPoints;
-   double            takeProfitPoints;
    double            stopLossPrice;
    double            takeProfitPrice;
+   double            stopLossPoints;
+   double            takeProfitPoints;
    string            message;
   };
 //
@@ -34,151 +73,222 @@ private:
    CBollingerBands   bollingerBands;
    CRSIIndicator     rsi;
 
-   int               rsiOverbought;
-   int               rsiOversold;
-
-   double            breakEntryBufferPercent;
-   // % of candle body used as Bollinger Band buffer.
-   // Requires price to move slightly beyond the band before triggering a trade.
-
-   bool              useBBTP;        // true = take profit at opposite Bollinger Band
-
-   double            riskReward;     // Risk-reward ratio for TP when not using Bollinger Band TP
-   double            minSLPoints;    // Minimum allowed stop loss distance (points)
-   double            maxSLPoints;    // Maximum allowed stop loss distance (points)
-
    string            symbol;
    ENUM_TIMEFRAMES   timeframe;
+
+   int               rsiOverbought;
+   int               rsiOversold;
+   double            breakEntryBufferPercent;
+   bool              useBBTP;
+   double            riskReward;
+   double            minSLPoints;
+   double            maxSLPoints;
+   double            slBufferPoints;
+   //------------------------------------
+   // Read current candle and indicator data
+   //------------------------------------
+   void              ReadCandleData(CandleData &data)
+     {
+      data.closeEntry = iClose(symbol, timeframe, 1);
+      data.openEntry  = iOpen(symbol, timeframe, 1);
+      data.closeBreak = iClose(symbol, timeframe, 2);
+      data.openBreak  = iOpen(symbol, timeframe, 2);
+
+      data.bbLowerEntry  = bollingerBands.GetLower(1);
+      data.bbMiddleEntry = bollingerBands.GetMiddle(1);
+      data.bbUpperEntry  = bollingerBands.GetUpper(1);
+
+      data.bbLowerBreak  = bollingerBands.GetLower(2);
+      data.bbUpperBreak  = bollingerBands.GetUpper(2);
+
+      data.rsiBreak = rsi.GetValue(2);
+
+      data.entryBody = MathAbs(data.closeEntry - data.openEntry);
+      data.breakBody = MathAbs(data.closeBreak - data.openBreak);
+
+      data.entryBuffer = data.entryBody * breakEntryBufferPercent / 100.0;
+      data.breakBuffer = data.breakBody * breakEntryBufferPercent / 100.0;
+     }
+   // Evaluate candle color
+   bool              IsGreen(double open, double close) { return close > open; }
+   bool              IsRed(double open, double close)   { return close < open; }
+   // Evaluate rules for BUY or SELL
+   RuleCheck         EvaluateRules(const CandleData &data, TradeDirection direction)
+     {
+      RuleCheck rules = {};
+
+      double breakBand = direction == DIR_BUY ? data.bbLowerBreak : data.bbUpperBreak;
+      double entryBand = direction == DIR_BUY ? data.bbLowerEntry : data.bbUpperEntry;
+
+      // RSI threshold
+      rules.BreakCandleRSIThresholdMet = direction == DIR_BUY
+                                         ? (data.rsiBreak < rsiOversold)
+                                         : (data.rsiBreak > rsiOverbought);
+
+      // Band break condition
+      rules.BreakCandleBreaksBand = direction == DIR_BUY
+                                    ? (data.closeBreak < breakBand - data.breakBuffer)
+                                    : (data.closeBreak > breakBand + data.breakBuffer);
+
+      // Entry candle re-enter band
+      rules.EntryCandleReentersBand = direction == DIR_BUY
+                                      ? (data.closeEntry > entryBand + data.entryBuffer)
+                                      : (data.closeEntry < entryBand - data.entryBuffer);
+
+      // Candle colors
+      rules.EntryCandleIsGreen = IsGreen(data.openEntry, data.closeEntry);
+      rules.EntryCandleIsRed   = IsRed(data.openEntry, data.closeEntry);
+
+      rules.BreakCandleIsGreen = IsGreen(data.openBreak, data.closeBreak);
+      rules.BreakCandleIsRed   = IsRed(data.openBreak, data.closeBreak);
+
+      // Entry body relative to middle BB
+      rules.EntryBodyRelativeToMidBB = direction == DIR_BUY
+                                       ? (data.closeEntry < data.bbMiddleEntry && data.openEntry < data.bbMiddleEntry)
+                                       : (data.closeEntry > data.bbMiddleEntry && data.openEntry > data.bbMiddleEntry);
+
+      return rules;
+     }
    //
-   bool              CheckBuyConditions(double closeEntry, double openEntry, double closeBreak, double openBreak,
-                                        double bbLowerEntry, double bbMiddleEntry, double bbLowerBreak,
-                                        double rsiBreak, double breakBuffer, double entryBuffer)
+   string            FormatRuleLog(const RuleCheck &rules, const CandleData &data, TradeDirection direction)
      {
-      bool buyRSI          = rsiBreak < rsiOversold;
-      bool buyBreakBelow   = closeBreak < bbLowerBreak - breakBuffer;
-      bool buyEntryAbove   = closeEntry > bbLowerEntry + entryBuffer;
-      bool buyEntryGreen   = closeEntry > openEntry;
-      bool buyBreakRed     = closeBreak < openBreak;
-      bool buyBodyBelowMid = closeEntry < bbMiddleEntry && openEntry < bbMiddleEntry;
+      double entryBand = direction == DIR_BUY ? data.bbLowerEntry : data.bbUpperEntry;
+      double breakBand = direction == DIR_BUY ? data.bbLowerBreak : data.bbUpperBreak;
 
-      return buyRSI && buyBreakBelow && buyEntryAbove && buyEntryGreen && buyBreakRed && buyBodyBelowMid;
+      string indent = "  ";
+      string label  = direction == DIR_BUY ? "BUY Rules:" : "SELL Rules:";
+
+      string rsiComp  = direction == DIR_BUY ? "<" : ">";
+      string bandComp = direction == DIR_BUY ? "<" : ">";
+
+      // --- Determine actual candle colors
+      string breakActual = data.closeBreak > data.openBreak ? "GREEN" :
+                           data.closeBreak < data.openBreak ? "RED" : "DOJI";
+
+      string entryActual = data.closeEntry > data.openEntry ? "GREEN" :
+                           data.closeEntry < data.openEntry ? "RED" : "DOJI";
+
+      // --- Expected candle colors
+      string breakExpected = direction == DIR_BUY ? "RED" : "GREEN";
+      string entryExpected = direction == DIR_BUY ? "GREEN" : "RED";
+
+      // --- Color rule results
+      bool breakColorPass = direction == DIR_BUY ? rules.BreakCandleIsRed : rules.BreakCandleIsGreen;
+      bool entryColorPass = direction == DIR_BUY ? rules.EntryCandleIsGreen : rules.EntryCandleIsRed;
+
+      // --- Mid BB description
+      string midBBDesc;
+
+      if(rules.EntryBodyRelativeToMidBB)
+         midBBDesc = direction == DIR_BUY ?
+                     "Candle body entirely below Mid BB" :
+                     "Candle body entirely above Mid BB";
+      else
+         midBBDesc = direction == DIR_BUY ?
+                     "Candle body not entirely below Mid BB" :
+                     "Candle body not entirely above Mid BB";
+
+      return StringFormat(
+                "%s%s\n"
+                "%sBreakCandle RSI Met:     %-4s | RSI: %.2f | Threshold: %s %d\n"
+                "%sBreakCandle Band Break:  %-4s | Close: %.5f | Threshold: %s %.5f\n"
+                "%sBreakCandle Color:       %-4s | Expected: %s | Actual: %s | Open: %.5f Close: %.5f\n"
+                "%sEntryCandle Color:       %-4s | Expected: %s | Actual: %s | Open: %.5f Close: %.5f\n"
+                "%sEntryCandle Re-enter BB: %-4s | Close: %.5f | Threshold: %s %.5f\n"
+                "%sEntry vs Mid BB:         %-4s | Close: %.5f Open: %.5f Mid BB: %.5f | %s",
+
+                indent, label,
+
+                indent, rules.BreakCandleRSIThresholdMet ? "PASS" : "FAIL",
+                data.rsiBreak, rsiComp, direction == DIR_BUY ? rsiOversold : rsiOverbought,
+
+                indent, rules.BreakCandleBreaksBand ? "PASS" : "FAIL",
+                data.closeBreak, bandComp, breakBand,
+
+                indent, breakColorPass ? "PASS" : "FAIL",
+                breakExpected, breakActual, data.openBreak, data.closeBreak,
+
+                indent, entryColorPass ? "PASS" : "FAIL",
+                entryExpected, entryActual, data.openEntry, data.closeEntry,
+
+                indent, rules.EntryCandleReentersBand ? "PASS" : "FAIL",
+                data.closeEntry, direction == DIR_BUY ? ">" : "<", entryBand,
+
+                indent, rules.EntryBodyRelativeToMidBB ? "PASS" : "FAIL",
+                data.closeEntry, data.openEntry, data.bbMiddleEntry, midBBDesc
+             );
      }
-
-   bool              CheckSellConditions(double closeEntry, double openEntry, double closeBreak, double openBreak,
-                                         double bbUpperEntry, double bbMiddleEntry, double bbUpperBreak,
-                                         double rsiBreak, double breakBuffer, double entryBuffer)
+   //
+   SignalResult      BuildSignal(const CandleData &data, const RuleCheck &rules, TradeDirection direction)
      {
-      bool sellRSI          = rsiBreak > rsiOverbought;
-      bool sellBreakAbove   = closeBreak > bbUpperBreak + breakBuffer;
-      bool sellEntryBelow   = closeEntry < bbUpperEntry - entryBuffer;
-      bool sellEntryRed     = closeEntry < openEntry;
-      bool sellBreakGreen   = closeBreak > openBreak;
-      bool sellBodyAboveMid = closeEntry > bbMiddleEntry && openEntry > bbMiddleEntry;
+      SignalResult result= {};
+      result.type = direction==DIR_BUY?SIGNAL_BUY:SIGNAL_SELL;
+      result.entryPrice = data.closeEntry;
 
-      return sellRSI && sellBreakAbove && sellEntryBelow && sellEntryRed && sellBreakGreen && sellBodyAboveMid;
-     }
+      // SL anchor: nearest structure level between break and entry
+      double slAnchorPrice = direction == DIR_BUY
+                             ? MathMin(data.closeBreak, data.closeEntry)
+                             : MathMax(data.closeBreak, data.closeEntry);
 
-   SignalResult      BuildBuySignal(double closeEntry)
-     {
-      SignalResult result;
-      result.type = SIGNAL_BUY;
-      result.entryPrice = closeEntry;
+      double slBufferPrice = slBufferPoints * _Point;
+      // Apply buffer to SL anchor to get final stop loss
+      double bufferedSLPrice = 0.0;
+      if(direction == DIR_BUY)
+         bufferedSLPrice = slAnchorPrice - slBufferPrice;
+      else
+         bufferedSLPrice = slAnchorPrice + slBufferPrice;
+      result.stopLossPrice  = bufferedSLPrice;
 
-      double stopLossPrice = GetBuyStopLoss();
-      double stopLossPoints = MathAbs(closeEntry - stopLossPrice) / _Point;
+      double riskPrice = MathAbs(data.closeEntry - bufferedSLPrice);
+      result.stopLossPoints = riskPrice / _Point;
 
-      if(stopLossPoints < minSLPoints || stopLossPoints > maxSLPoints)
+      if(result.stopLossPoints<minSLPoints || result.stopLossPoints>maxSLPoints)
         {
          result.type = SIGNAL_NONE;
-         result.message = StringFormat(
-                             "BUY SL out of range | SL: %.1f pts | Allowed: %.1f - %.1f pts",
-                             stopLossPoints, minSLPoints, maxSLPoints
-                          );
+         result.message = StringFormat("%s SL out of range | %.1f pts | Allowed %.1f-%.1f",
+                                       direction==DIR_BUY?"BUY":"SELL",
+                                       result.stopLossPoints,minSLPoints,maxSLPoints);
          return result;
         }
 
-      double takeProfitPrice = useBBTP ? bollingerBands.GetUpper(1) : closeEntry + (closeEntry - stopLossPrice) * riskReward;
-      double takeProfitPoints = MathAbs(takeProfitPrice - closeEntry) / _Point;
+      // Take profit
+      double rawTPPrice = data.closeEntry + (direction==DIR_BUY?1:-1)*riskPrice*riskReward;
+      double bbTPPrice = direction==DIR_BUY?bollingerBands.GetUpper(1):bollingerBands.GetLower(1);
+      result.takeProfitPrice  = useBBTP ? (direction==DIR_BUY?MathMax(bbTPPrice,rawTPPrice):MathMin(bbTPPrice,rawTPPrice)) : rawTPPrice;
+      result.takeProfitPoints = MathAbs(result.takeProfitPrice-data.closeEntry)/_Point;
 
-      result.stopLossPrice = stopLossPrice;
-      result.stopLossPoints = stopLossPoints;
-      result.takeProfitPrice = takeProfitPrice;
-      result.takeProfitPoints = takeProfitPoints;
       result.message = StringFormat(
-                          "BUY signal | Entry: %.5f | SL: %.5f (%.1f pts) | TP: %.5f (%.1f pts)",
-                          result.entryPrice, result.stopLossPrice, result.stopLossPoints,
-                          result.takeProfitPrice, result.takeProfitPoints
+                          "%s signal | Entry: %.5f | SL: %.5f (%.1f pts) | TP: %.5f (%.1f pts) | RR: %.2f | BB L: %.5f M: %.5f U: %.5f | RSI: %.2f\n%s",
+                          direction==DIR_BUY?"BUY":"SELL",
+                          result.entryPrice,result.stopLossPrice,result.stopLossPoints,
+                          result.takeProfitPrice,result.takeProfitPoints,
+                          result.stopLossPoints>0?result.takeProfitPoints/result.stopLossPoints:0,
+                          data.bbLowerEntry,data.bbMiddleEntry,data.bbUpperEntry,
+                          data.rsiBreak,
+                          FormatRuleLog(rules,data,direction)
                        );
       return result;
      }
-
-   SignalResult      BuildSellSignal(double closeEntry)
+   //
+   SignalResult      BuildNoSignal(const CandleData &data,const RuleCheck &buyRules,const RuleCheck &sellRules)
      {
-      SignalResult result;
-      result.type = SIGNAL_SELL;
-      result.entryPrice = closeEntry;
-
-      double stopLossPrice = GetSellStopLoss();
-      double stopLossPoints = MathAbs(stopLossPrice - closeEntry) / _Point;
-
-      if(stopLossPoints < minSLPoints || stopLossPoints > maxSLPoints)
-        {
-         result.type = SIGNAL_NONE;
-         result.message = StringFormat(
-                             "SELL SL out of range | SL: %.1f pts | Allowed: %.1f - %.1f pts",
-                             stopLossPoints, minSLPoints, maxSLPoints
-                          );
-         return result;
-        }
-
-      double takeProfitPrice = useBBTP ? bollingerBands.GetLower(1) : closeEntry - (stopLossPrice - closeEntry) * riskReward;
-      double takeProfitPoints = MathAbs(takeProfitPrice - closeEntry) / _Point;
-
-      result.stopLossPrice = stopLossPrice;
-      result.stopLossPoints = stopLossPoints;
-      result.takeProfitPrice = takeProfitPrice;
-      result.takeProfitPoints = takeProfitPoints;
-      result.message = StringFormat(
-                          "SELL signal | Entry: %.5f | SL: %.5f (%.1f pts) | TP: %.5f (%.1f pts)",
-                          result.entryPrice, result.stopLossPrice, result.stopLossPoints,
-                          result.takeProfitPrice, result.takeProfitPoints
-                       );
+      SignalResult result= {};
+      result.type=SIGNAL_NONE;
+      result.message = StringFormat("No trade conditions met\n%s\n%s",
+                                    FormatRuleLog(buyRules,data,DIR_BUY),
+                                    FormatRuleLog(sellRules,data,DIR_SELL));
       return result;
      }
-
-   double            GetBuyStopLoss()
-     {
-      // Entry candle index = 1
-      // Break candle index = 2
-      double entryLow = iLow(symbol, timeframe, 1);
-      double breakLow = iLow(symbol, timeframe, 2);
-
-      // Minimum of the two
-      return MathMin(entryLow, breakLow);
-     }
-
-   double            GetSellStopLoss()
-     {
-      // Entry candle index = 1
-      // Break candle index = 2
-      double entryHigh = iHigh(symbol, timeframe, 1);
-      double breakHigh = iHigh(symbol, timeframe, 2);
-
-      // Maximum of the two for SELL stop-loss
-      return MathMax(entryHigh, breakHigh);
-     }
-
+   //
 public:
-                     CStrategySignalService(CBollingerBands &_bollingerBands,
-                          CRSIIndicator &_rsi,
-                          string _symbol,
-                          ENUM_TIMEFRAMES _tf)
+   //
+                     CStrategySignalService(CBollingerBands &_bollingerBands,CRSIIndicator &_rsi,string _symbol,ENUM_TIMEFRAMES _tf)
       :              bollingerBands(_bollingerBands), rsi(_rsi), symbol(_symbol), timeframe(_tf)
-     {
-     }
+     {}
 
-   void              Configure(int _rsiOversold, int _rsiOverbought, double _breakEntryBufferPercent,
-                               bool _useBBTP, double _riskReward, double _minSLPoints, double _maxSLPoints)
+   // Configure strategy parameters
+   void              Configure(int _rsiOversold,int _rsiOverbought,double _breakEntryBufferPercent,
+                               bool _useBBTP,double _riskReward,double _minSLPoints,double _maxSLPoints, double _slBufferPoints)
      {
       rsiOversold             = _rsiOversold;
       rsiOverbought           = _rsiOverbought;
@@ -187,102 +297,33 @@ public:
       riskReward              = _riskReward;
       minSLPoints             = _minSLPoints;
       maxSLPoints             = _maxSLPoints;
+      slBufferPoints          = _slBufferPoints;
      }
+   //
    SignalResult      GetSignal()
      {
-      SignalResult result;
-      result.type = SIGNAL_NONE;
+      CandleData data;
+      ReadCandleData(data);
 
-      // --- Candle & indicator values ---
-      double closeEntry = iClose(symbol, timeframe, 1);
-      double openEntry  = iOpen(symbol, timeframe, 1);
-      double closeBreak = iClose(symbol, timeframe, 2);
-      double openBreak  = iOpen(symbol, timeframe, 2);
+      RuleCheck buyRules  = EvaluateRules(data,DIR_BUY);
+      RuleCheck sellRules = EvaluateRules(data,DIR_SELL);
 
-      double bbLowerEntry  = bollingerBands.GetLower(1);
-      double bbMiddleEntry = bollingerBands.GetMiddle(1);
-      double bbUpperEntry  = bollingerBands.GetUpper(1);
+      bool buySignal = buyRules.BreakCandleRSIThresholdMet && buyRules.BreakCandleBreaksBand &&
+                       buyRules.EntryCandleReentersBand && buyRules.EntryCandleIsGreen &&
+                       buyRules.BreakCandleIsRed && buyRules.EntryBodyRelativeToMidBB;
 
-      double bbLowerBreak  = bollingerBands.GetLower(2);
-      double bbUpperBreak  = bollingerBands.GetUpper(2);
-
-      double rsiBreak = rsi.GetValue(2);
-
-      double entryBody = MathAbs(closeEntry - openEntry);
-      double entryBuffer = entryBody * breakEntryBufferPercent / 100.0;
-
-      double breakBody = MathAbs(closeBreak - openBreak);
-      double breakBuffer = breakBody * breakEntryBufferPercent / 100.0;
-
-      // --- Individual rule checks for logging ---
-      bool buyRSI          = rsiBreak < rsiOversold;
-      bool buyBreakBelow   = closeBreak < bbLowerBreak - breakBuffer;
-      bool buyEntryAbove   = closeEntry > bbLowerEntry + entryBuffer;
-      bool buyEntryGreen   = closeEntry > openEntry;
-      bool buyBreakRed     = closeBreak < openBreak;
-      bool buyBodyBelowMid = closeEntry < bbMiddleEntry && openEntry < bbMiddleEntry;
-
-      bool sellRSI          = rsiBreak > rsiOverbought;
-      bool sellBreakAbove   = closeBreak > bbUpperBreak + breakBuffer;
-      bool sellEntryBelow   = closeEntry < bbUpperEntry - entryBuffer;
-      bool sellEntryRed     = closeEntry < openEntry;
-      bool sellBreakGreen   = closeBreak > openBreak;
-      bool sellBodyAboveMid = closeEntry > bbMiddleEntry && openEntry > bbMiddleEntry;
-
-      // --- Calculate signals using helper methods ---
-      bool buySignal  = CheckBuyConditions(
-                           closeEntry, openEntry, closeBreak, openBreak,
-                           bbLowerEntry, bbMiddleEntry, bbLowerBreak,
-                           rsiBreak, breakBuffer, entryBuffer
-                        );
-
-      bool sellSignal = CheckSellConditions(
-                           closeEntry, openEntry, closeBreak, openBreak,
-                           bbUpperEntry, bbMiddleEntry, bbUpperBreak,
-                           rsiBreak, breakBuffer, entryBuffer
-                        );
-
-      Logger::Instance().Debug(
-         StringFormat(
-            "Signal Details\n"
-            "  Entry: C=%.5f O=%.5f B=%.5f Buf=%.5f | Break: C=%.5f O=%.5f B=%.5f Buf=%.5f\n"
-            "  BB Entry: L=%.5f M=%.5f U=%.5f | BB Break: L=%.5f U=%.5f | RSI Break: %.2f\n"
-            "  BUY Rules: RSI[%s] BreakBelow[%s] EntryAbove[%s] EntryGreen[%s] BreakRed[%s] BodyBelowMid[%s]\n"
-            "  SELL Rules: RSI[%s] BreakAbove[%s] EntryBelow[%s] EntryRed[%s] BreakGreen[%s] BodyAboveMid[%s]\n"
-            "  Signals: BUY[%s] SELL[%s]",
-            closeEntry, openEntry, entryBody, entryBuffer,
-            closeBreak, openBreak, breakBody, breakBuffer,
-            bbLowerEntry, bbMiddleEntry, bbUpperEntry,
-            bbLowerBreak, bbUpperBreak,
-            rsiBreak,
-            buyRSI?"PASS":"FAIL",
-            buyBreakBelow?"PASS":"FAIL",
-            buyEntryAbove?"PASS":"FAIL",
-            buyEntryGreen?"PASS":"FAIL",
-            buyBreakRed?"PASS":"FAIL",
-            buyBodyBelowMid?"PASS":"FAIL",
-            sellRSI?"PASS":"FAIL",
-            sellBreakAbove?"PASS":"FAIL",
-            sellEntryBelow?"PASS":"FAIL",
-            sellEntryRed?"PASS":"FAIL",
-            sellBreakGreen?"PASS":"FAIL",
-            sellBodyAboveMid?"PASS":"FAIL",
-            buySignal?"YES":"NO",
-            sellSignal?"YES":"NO"
-         )
-      );
+      bool sellSignal = sellRules.BreakCandleRSIThresholdMet && sellRules.BreakCandleBreaksBand &&
+                        sellRules.EntryCandleReentersBand && sellRules.EntryCandleIsRed &&
+                        sellRules.BreakCandleIsGreen && sellRules.EntryBodyRelativeToMidBB;
 
       if(buySignal)
-         return BuildBuySignal(closeEntry);
-
+         return BuildSignal(data,buyRules,DIR_BUY);
       if(sellSignal)
-         return BuildSellSignal(closeEntry);
+         return BuildSignal(data,sellRules,DIR_SELL);
 
-      // --- No signal ---
-      result.message = "No trade conditions met";
-      return result;
+      return BuildNoSignal(data,buyRules,sellRules);
      }
   };
+
 #endif
-//+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
