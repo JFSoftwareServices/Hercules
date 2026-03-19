@@ -39,8 +39,13 @@ struct CandleData
   {
    double            closeEntry;
    double            openEntry;
+   double            highEntry;
+   double            lowEntry;
+
    double            closeBreak;
    double            openBreak;
+   double            highBreak;
+   double            lowBreak;
 
    double            bbLowerEntry;
    double            bbMiddleEntry;
@@ -91,8 +96,12 @@ private:
      {
       data.closeEntry = iClose(symbol, timeframe, 1);
       data.openEntry  = iOpen(symbol, timeframe, 1);
+      data.lowEntry   = iLow(symbol, timeframe, 1);
+      data.highEntry  = iHigh(symbol, timeframe, 1);
       data.closeBreak = iClose(symbol, timeframe, 2);
       data.openBreak  = iOpen(symbol, timeframe, 2);
+      data.lowBreak   = iLow(symbol, timeframe, 2);
+      data.highBreak  = iHigh(symbol, timeframe, 2);
 
       data.bbLowerEntry  = bollingerBands.GetLower(1);
       data.bbMiddleEntry = bollingerBands.GetMiddle(1);
@@ -188,35 +197,37 @@ private:
                      "Candle body not entirely below Mid BB" :
                      "Candle body not entirely above Mid BB";
 
-      return StringFormat(
-                "%s%s\n"
-                "%sBreakCandle RSI Met:     %-4s | RSI: %.2f | Threshold: %s %d\n"
-                "%sBreakCandle Band Break:  %-4s | Close: %.5f | Threshold: %s %.5f\n"
-                "%sBreakCandle Color:       %-4s | Expected: %s | Actual: %s | Open: %.5f Close: %.5f\n"
-                "%sEntryCandle Color:       %-4s | Expected: %s | Actual: %s | Open: %.5f Close: %.5f\n"
-                "%sEntryCandle Re-enter BB: %-4s | Close: %.5f | Threshold: %s %.5f\n"
-                "%sEntry vs Mid BB:         %-4s | Close: %.5f Open: %.5f Mid BB: %.5f | %s",
+      return            StringFormat(
+                           "%s%s\n"
+                           "%sBreakCandle RSI Met:     %-4s | RSI: %.2f | Threshold: %s %d\n"
+                           "%sBreakCandle Band Break:  %-4s | Close: %.5f | Threshold: %s %.5f\n"
+                           "%sBreakCandle Color:       %-4s | Expected: %s | Actual: %s | Open: %.5f High: %.5f Low: %.5f Close: %.5f\n"
+                           "%sEntryCandle Color:       %-4s | Expected: %s | Actual: %s | Open: %.5f High: %.5f Low: %.5f Close: %.5f\n"
+                           "%sEntryCandle Re-enter BB: %-4s | Close: %.5f | Threshold: %s %.5f\n"
+                           "%sEntry vs Mid BB:         %-4s | Close: %.5f Open: %.5f Mid BB: %.5f | %s",
 
-                indent, label,
+                           indent, label,
 
-                indent, rules.BreakCandleRSIThresholdMet ? "PASS" : "FAIL",
-                data.rsiBreak, rsiComp, direction == DIR_BUY ? rsiOversold : rsiOverbought,
+                           indent, rules.BreakCandleRSIThresholdMet ? "PASS" : "FAIL",
+                           data.rsiBreak, rsiComp, direction == DIR_BUY ? rsiOversold : rsiOverbought,
 
-                indent, rules.BreakCandleBreaksBand ? "PASS" : "FAIL",
-                data.closeBreak, bandComp, breakBand,
+                           indent, rules.BreakCandleBreaksBand ? "PASS" : "FAIL",
+                           data.closeBreak, bandComp, breakBand,
 
-                indent, breakColorPass ? "PASS" : "FAIL",
-                breakExpected, breakActual, data.openBreak, data.closeBreak,
+                           indent, breakColorPass ? "PASS" : "FAIL",
+                           breakExpected, breakActual,
+                           data.openBreak, data.highBreak, data.lowBreak, data.closeBreak,
 
-                indent, entryColorPass ? "PASS" : "FAIL",
-                entryExpected, entryActual, data.openEntry, data.closeEntry,
+                           indent, entryColorPass ? "PASS" : "FAIL",
+                           entryExpected, entryActual,
+                           data.openEntry, data.highEntry, data.lowEntry, data.closeEntry,
 
-                indent, rules.EntryCandleReentersBand ? "PASS" : "FAIL",
-                data.closeEntry, direction == DIR_BUY ? ">" : "<", entryBand,
+                           indent, rules.EntryCandleReentersBand ? "PASS" : "FAIL",
+                           data.closeEntry, direction == DIR_BUY ? ">" : "<", entryBand,
 
-                indent, rules.EntryBodyRelativeToMidBB ? "PASS" : "FAIL",
-                data.closeEntry, data.openEntry, data.bbMiddleEntry, midBBDesc
-             );
+                           indent, rules.EntryBodyRelativeToMidBB ? "PASS" : "FAIL",
+                           data.closeEntry, data.openEntry, data.bbMiddleEntry, midBBDesc
+                        );
      }
    //
    SignalResult      BuildSignal(const CandleData &data, const RuleCheck &rules, TradeDirection direction)
@@ -225,10 +236,10 @@ private:
       result.type = direction==DIR_BUY?SIGNAL_BUY:SIGNAL_SELL;
       result.entryPrice = data.closeEntry;
 
-      // SL anchor: nearest structure level between break and entry
+      // SL anchor: nearest structure level between break and entry (using highs/lows)
       double slAnchorPrice = direction == DIR_BUY
-                             ? MathMin(data.closeBreak, data.closeEntry)
-                             : MathMax(data.closeBreak, data.closeEntry);
+                             ? MathMin(data.lowBreak, data.lowEntry)   // for buys → use lows
+                             : MathMax(data.highBreak, data.highEntry); // for sells → use highs
 
       double slBufferPrice = slBufferPoints * _Point;
       // Apply buffer to SL anchor to get final stop loss
@@ -274,7 +285,7 @@ private:
      {
       SignalResult result= {};
       result.type=SIGNAL_NONE;
-      result.message = StringFormat("No trade conditions met\n%s\n%s",
+      result.message = StringFormat("No BUY or SELL signal\n%s\n%s",
                                     FormatRuleLog(buyRules,data,DIR_BUY),
                                     FormatRuleLog(sellRules,data,DIR_SELL));
       return result;
