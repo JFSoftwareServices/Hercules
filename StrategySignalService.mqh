@@ -204,7 +204,7 @@ private:
                            "%sBreakCandle Color:       %-4s | Expected: %s | Actual: %s | Open: %.5f High: %.5f Low: %.5f Close: %.5f\n"
                            "%sEntryCandle Color:       %-4s | Expected: %s | Actual: %s | Open: %.5f High: %.5f Low: %.5f Close: %.5f\n"
                            "%sEntryCandle Re-enter BB: %-4s | Close: %.5f | Threshold: %s %.5f\n"
-                           "%sEntry vs Mid BB:         %-4s | Close: %.5f Open: %.5f Mid BB: %.5f | %s",
+                           "%sEntryCandle vs Mid BB:   %-4s | Close: %.5f Open: %.5f Mid BB: %.5f | %s",
 
                            indent, label,
 
