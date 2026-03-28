@@ -1,19 +1,21 @@
-//+------------------------------------------------------------------+
-//|                                              TradeManager.mqh    |
-//| PURPOSE: Execute and manage trades, including SL/TP, breakeven,  |
-//|          and safe closing of all positions.                      |
+﻿//+------------------------------------------------------------------+
+//| TradeManager.mqh                                                 |
+//| Execute and manage trades, including SL/TP, breakeven, and safe  |
+//| closing of all positions.                                        |
 //| FEATURES:                                                        |
 //|   - Buy/Sell with lot, SL, TP                                    |
 //|   - GetOpenPositionTicket() for open position detection          |
 //|   - HasOpenPositions() helper                                    |
 //|   - CloseAllPositions() with once-per-trigger logging            |
+//|                                                                  |
+//| © 2026 JF Software Services Ltd                                  |
 //+------------------------------------------------------------------+
+
 #ifndef __TRADE_MANAGER__
 #define __TRADE_MANAGER__
-
+//
 #include <Trade/Trade.mqh>
 #include "../CommonLibs/Core/Logger.mqh"
-
 //
 struct TradeResult
   {
@@ -43,7 +45,7 @@ private:
    double            m_takeProfitPrice;
    int               m_magic;
    bool              m_warnedCloseFail; // prevent repeated warnings
-
+   //
 public:
    // Initialize trade manager
    void              Init(string symbol, double lotSize, double slPrice, double tpPrice, int magic)
@@ -53,11 +55,9 @@ public:
       m_stopLossPrice   = slPrice;
       m_takeProfitPrice = tpPrice;
       m_magic           = magic;
-
       m_trade.SetExpertMagicNumber(m_magic);
       m_warnedCloseFail = false;
      }
-
    // Buy market order
    TradeResult       Buy()
      {
@@ -72,10 +72,8 @@ public:
       result.entryPrice = m_trade.ResultPrice();
       result.stopLoss   = m_stopLossPrice;
       result.takeProfit = m_takeProfitPrice;
-
       return result;
      }
-
    // Sell market order
    TradeResult       Sell()
      {
@@ -85,16 +83,13 @@ public:
          result.message = StringFormat("Sell failed: %d (%s)", m_trade.ResultRetcode(), m_trade.ResultComment());
          return result;
         }
-
       result.success    = true;
       result.ticket     = m_trade.ResultOrder();
       result.entryPrice = m_trade.ResultPrice();
       result.stopLoss   = m_stopLossPrice;
       result.takeProfit = m_takeProfitPrice;
-
       return result;
      }
-
    // Close all positions for symbol+magic
    CloseResult       CloseAllPositions()
      {
@@ -104,15 +99,11 @@ public:
          ulong ticket = PositionGetTicket(i);
          if(!PositionSelectByTicket(ticket))
             continue;
-
          if(PositionGetInteger(POSITION_MAGIC) != m_magic)
             continue;
-
          if(PositionGetString(POSITION_SYMBOL) != m_symbol)
             continue;
-
          result.totalFound++;
-
          if(m_trade.PositionClose(ticket))
            {
             result.closed++;
@@ -137,7 +128,6 @@ public:
         }
       return result;
      }
-
    // Return first open position ticket for symbol+magic, or 0 if none
    ulong             GetOpenPositionTicket()
      {
@@ -146,24 +136,19 @@ public:
          ulong ticket = PositionGetTicket(i);
          if(!PositionSelectByTicket(ticket))
             continue;
-
          if(PositionGetInteger(POSITION_MAGIC) != m_magic)
             continue;
-
          if(PositionGetString(POSITION_SYMBOL) != m_symbol)
             continue;
-
          return ticket;
         }
       return 0;
      }
-
    // Check if any position is open for symbol+magic
    bool              HasOpenPositions()
      {
       return GetOpenPositionTicket() != 0;
      }
   };
-
 #endif
 //+------------------------------------------------------------------+

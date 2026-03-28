@@ -1,5 +1,13 @@
 ﻿//+------------------------------------------------------------------+
 //| CloseTracker.mqh                                                 |
+//| Move stop loss to breakeven when trade reaches X risk            |
+//|                                                                  |
+//| © 2026 JF Software Services Ltd                                  |
+//+------------------------------------------------------------------+
+#ifndef __CLOSE_TRACKER__
+#define __CLOSE_TRACKER__
+//+------------------------------------------------------------------+
+//| CloseTracker.mqh                                                 |
 //|                                                                  |
 //| Utility class that tracks the timestamp of the most recent       |
 //| trade close event.                                               |
@@ -38,43 +46,34 @@ private:
    datetime          m_lastCloseTime;
    string            m_symbol;
    ENUM_TIMEFRAMES   m_timeframe;
-
 public:
-   // Constructor
                      CTradeCloseTracker(string symbol, ENUM_TIMEFRAMES timeframe)
      {
       m_symbol = symbol;
       m_timeframe = timeframe;
       m_lastCloseTime = 0;
      }
-
    // Update tracker when a deal occurs
    void              ProcessDeal(ulong deal_ticket)
      {
       if(!HistoryDealSelect(deal_ticket))
          return;
-
       if(HistoryDealGetInteger(deal_ticket, DEAL_ENTRY) != DEAL_ENTRY_OUT)
          return;
-
       datetime closeTime = (datetime)HistoryDealGetInteger(deal_ticket, DEAL_TIME);
       if(closeTime > 0)
          m_lastCloseTime = closeTime;
      }
-
    // Returns number of candles elapsed since last trade close on the given symbol & timeframe
    int               CandlesSinceLastClose()
      {
       if(m_lastCloseTime == 0)
          return -1;
-
       int lastCloseBar = iBarShift(m_symbol, m_timeframe, m_lastCloseTime, true);
       if(lastCloseBar < 0)
          return -1;
-
       return lastCloseBar; // number of bars since close
      }
-
    // Check if X candles have passed since last close
    bool              HasCandlesPassed(int candles)
      {
@@ -84,7 +83,7 @@ public:
 
       return elapsed >= candles;
      }
-
    datetime          GetLastCloseTime() { return m_lastCloseTime; }
   };
+#endif
 //+------------------------------------------------------------------+
